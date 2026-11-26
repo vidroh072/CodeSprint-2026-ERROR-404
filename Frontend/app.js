@@ -3,6 +3,7 @@ let autopays = JSON.parse(localStorage.getItem("upi_autopays")) || [];
 let hiddenCuts = JSON.parse(localStorage.getItem("upi_hidden_cuts")) || [];
 let currentFilter = "all";
 let lastDisplayed = null;
+let toastTimer = null;
 
 // DOM Elements
 const sampleSms = document.getElementById("sample-sms");
@@ -103,20 +104,21 @@ function saveData() {
     localStorage.setItem("upi_hidden_cuts", JSON.stringify(hiddenCuts));
 }
 
-// Show Toast Notification
+// Show Toast Notification (overlap-safe)
 function showToast(message) {
+    clearTimeout(toastTimer);
     toast.textContent = message;
     toast.classList.add("show");
-    setTimeout(() => toast.classList.remove("show"), 2800);
+    toastTimer = setTimeout(() => toast.classList.remove("show"), 2800);
 }
 
 // SMS Parser Logic (Banks, Apps & Games)
 function parseSMS(text) {
     const lowerText = text.toLowerCase();
 
-    // Extract Amount
-    const amountMatch = text.match(/(?:rs\.?|inr|₹)\s*(\d+(?:\.\d+)?)/i);
-    const amount = amountMatch ? Math.round(parseFloat(amountMatch[1])) : 0;
+    // Extract Amount (handles commas like Rs.1,499 or ₹2,500.50)
+    const amountMatch = text.match(/(?:rs\.?|inr|₹)\s*([\d,]+(?:\.\d+)?)/i);
+    const amount = amountMatch ? Math.round(parseFloat(amountMatch[1].replace(/,/g, ""))) : 0;
 
     // Detect Type
     let type = "Hidden Cut";
@@ -179,7 +181,7 @@ function parseSMS(text) {
 
     // Extract Countdown Days
     const daysMatch = text.match(/in\s+(\d+)\s+days?/i);
-    const daysLeft = daysMatch ? parseInt(daysMatch[1]) : 7;
+    const daysLeft = daysMatch ? parseInt(daysMatch[1], 10) : 7;
 
     return { app, amount, type, reasonKey, daysLeft };
 }
@@ -225,6 +227,16 @@ function analyzeText(text) {
     const data = parseSMS(text);
 
     if (data.type === "Autopay") {
+        // Prevent duplicate active autopay entries
+        const duplicate = autopays.find(
+            (a) => !a.cancelled && a.app === data.app && a.amount === data.amount && a.daysLeft === data.daysLeft
+        );
+        if (duplicate) {
+            updateExtractedCard({ ...duplicate, type: "Autopay" });
+            showToast(`ℹ️ ${data.app} (₹${data.amount}) is already in Active Autopays.`);
+            return;
+        }
+
         const newItem = {
             id: Date.now() + Math.floor(Math.random() * 1000),
             app: data.app,
@@ -303,7 +315,7 @@ function renderAutopays() {
                     <strong style="color:${isUrgent ? "#dc2626" : "#2563eb"};">
                         ${isUrgent ? "🔥" : "⏳"} ${daysText}
                     </strong><br>
-                    <button class="quick-cancel-btn" onclick="selectForCancel(${item.id})">Cancel & Upload Proof</button>
+                    <button class="quick-cancel-btn" onclick="selectForCancel(event, ${item.id})">Cancel & Upload Proof</button>
                </div>`;
 
         div.innerHTML = `
@@ -319,7 +331,8 @@ function renderAutopays() {
     });
 }
 
-window.selectForCancel = function (id) {
+window.selectForCancel = function (event, id) {
+    event.stopPropagation();
     proofApp.value = id;
     const item = autopays.find((a) => a.id == id);
     if (item) updateExtractedCard({ ...item, type: "Autopay" });
@@ -341,19 +354,22 @@ function renderHiddenCuts() {
     hiddenCuts.forEach((item) => {
         total += item.amount;
         const row = document.createElement("tr");
+        row.style.cursor = "pointer";
         row.innerHTML = `
             <td><strong>${item.app}</strong></td>
             <td>${getReasonText(item)}</td>
             <td style="color:#dc2626; font-weight:700;">₹${item.amount}</td>
-            <td><button class="delete-row-btn" onclick="deleteHiddenCut(${item.id})">✕</button></td>
+            <td><button class="delete-row-btn" onclick="deleteHiddenCut(event, ${item.id})">✕</button></td>
         `;
+        row.addEventListener("click", () => updateExtractedCard({ ...item, type: "Hidden Cut" }));
         hiddenCutsList.appendChild(row);
     });
 
     hiddenTotal.textContent = total;
 }
 
-window.deleteHiddenCut = function (id) {
+window.deleteHiddenCut = function (event, id) {
+    event.stopPropagation();
     hiddenCuts = hiddenCuts.filter((item) => item.id !== id);
     saveData();
     renderAll();
@@ -459,7 +475,7 @@ proofFile.addEventListener("change", () => {
     }
 });
 
-// Submit Proof & Verify via OCR (Tesseract.js)
+// Submit Proof & Strict 3-Point OCR Verification (App Name + Amount + Cancel Status)
 uploadProofBtn.addEventListener("click", async () => {
     const selectedId = proofApp.value;
     const file = proofFile.files[0];
@@ -472,42 +488,65 @@ uploadProofBtn.addEventListener("click", async () => {
         showToast("⚠️ Please upload a cancellation screenshot.");
         return;
     }
+    if (typeof Tesseract === "undefined") {
+        proofStatus.style.color = "#dc2626";
+        proofStatus.textContent = "❌ OCR library not loaded. Check internet connection and refresh.";
+        return;
+    }
 
     const item = autopays.find((a) => a.id == selectedId);
     if (!item) return;
 
     uploadProofBtn.disabled = true;
-    uploadProofBtn.textContent = "🔍 Scanning Proof (OCR)...";
+    uploadProofBtn.textContent = "🔍 Verifying Proof (OCR)...";
     proofStatus.style.color = "#2563eb";
-    proofStatus.textContent = "⏳ Reading text from screenshot, please wait...";
+    proofStatus.textContent = `⏳ Checking screenshot for "${item.app}", ₹${item.amount}, and cancellation status...`;
 
     try {
         const { data: { text } } = await Tesseract.recognize(file, "eng");
         const extracted = text.toLowerCase();
+        const normalizedText = extracted.replace(/,/g, ""); // Remove commas for amount matching
 
-        const validKeywords = [
+        // 1. Check Cancellation Keyword
+        const cancelKeywords = [
             "cancelled", "canceled", "revoked", "removed",
-            "deleted", "paused", "autopay", "mandate",
-            item.app.toLowerCase()
+            "deleted", "paused", "stopped", "inactive"
         ];
+        const hasCancelWord = cancelKeywords.find((word) => extracted.includes(word));
 
-        const matched = validKeywords.find((word) => extracted.includes(word));
+        // 2. Check Exact App Name (matches full name or primary word like "amazon" for "Amazon Prime")
+        const appLower = item.app.toLowerCase();
+        const primaryAppWord = appLower.split(" ")[0];
+        const hasAppName =
+            appLower === "unknown bank/app" ||
+            extracted.includes(appLower) ||
+            (primaryAppWord.length >= 3 && extracted.includes(primaryAppWord));
 
-        if (matched) {
+        // 3. Smart Amount Check: Only enforce if the screenshot actually shows a price
+        const hasAnyMoneyInImage = /(?:rs\.?|inr|₹)\s*\d+/i.test(normalizedText);
+        const amountRegex = new RegExp(`(?<!\\d)${item.amount}(?!\\d)`);
+        const hasAmount = !hasAnyMoneyInImage || item.amount === 0 || amountRegex.test(normalizedText);
+
+        if (hasCancelWord && hasAppName && hasAmount) {
             item.cancelled = true;
             item.proofName = file.name;
             saveData();
             renderAll();
             updateExtractedCard({ ...item, type: "Autopay" });
             proofStatus.style.color = "#16a34a";
-            proofStatus.textContent = `✅ OCR Verified (found "${matched}")! ${item.app} marked as Cancelled.`;
+            proofStatus.textContent = `✅ OCR Verified! Matched ${item.app}, ₹${item.amount}, and "${hasCancelWord}".`;
             proofFile.value = "";
             previewWrapper.classList.add("hidden");
-            showToast(`✅ ${item.app} Cancelled!`);
+            showToast(`✅ ${item.app} (₹${item.amount}) Cancelled!`);
         } else {
+            const missing = [];
+            if (!hasAppName) missing.push(`App name "${item.app}"`);
+            if (!hasAmount) missing.push(`Amount "₹${item.amount}"`);
+            if (!hasCancelWord) missing.push(`Cancellation status (Cancelled/Revoked/Removed)`);
+
             proofStatus.style.color = "#dc2626";
-            proofStatus.textContent = "❌ Rejected! No valid cancellation text found in this screenshot.";
-            showToast("❌ Invalid screenshot rejected!");
+            proofStatus.textContent = `❌ Rejected! आपके द्वारा डाला गया SCREENSHOT वैध नहीं है।`;
+            showToast("❌ Proof mismatch! Upload the correct screenshot.");
         }
     } catch (error) {
         proofStatus.style.color = "#dc2626";
