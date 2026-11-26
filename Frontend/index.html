@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UPI Autopay & Hidden Deduction Detector</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="toast"></div>
+
+    <!-- Header -->
+    <header class="hero">
+        <div class="hero-content">
+            <h1>🛡️ UPI Autopay & Hidden Deduction Detector</h1>
+            <p>Scan bank & UPI SMS to catch silent deductions, track active mandates, and cancel with proof.</p>
+            <div class="hero-actions">
+                <button id="clear-btn" class="btn-danger-outline">🗑️ Reset All</button>
+            </div>
+        </div>
+    </header>
+
+    <div class="container">
+
+        <!-- Dynamic Alert Banner -->
+        <section id="alert-section" class="alert-box">
+            <span class="alert-icon">🔔</span>
+            <div>
+                <strong>Alert Center:</strong>
+                <span id="alert-text">No urgent deductions right now. Analyze an SMS to begin.</span>
+            </div>
+        </section>
+
+        <!-- Summary Stats Row -->
+        <section class="stats-grid">
+            <div class="stat-card">
+                <span class="stat-label">Active Autopays</span>
+                <h2 id="stat-autopays">0</h2>
+            </div>
+            <div class="stat-card stat-red">
+                <span class="stat-label">Total Hidden Cuts</span>
+                <h2>₹<span id="stat-hidden">0</span></h2>
+            </div>
+            <div class="stat-card stat-amber">
+                <span class="stat-label">Urgent Alerts (≤ 3 Days)</span>
+                <h2 id="stat-urgent">0</h2>
+            </div>
+        </section>
+
+        <!-- Main 2-Column Dashboard Grid -->
+        <div class="dashboard-grid">
+
+            <!-- Left Column: SMS Scanner & Extracted Result -->
+            <div class="col-left">
+
+                <!-- 1. SMS Input & Sample Selector -->
+                <section class="card">
+                    <h2>📩 1. Scan SMS</h2>
+
+                    <label for="sample-sms">Select a Sample SMS:</label>
+                    <select id="sample-sms">
+                        <option value="">-- Choose Sample SMS --</option>
+                        <option value="Your UPI Autopay for Netflix of Rs.300 will be debited in 2 days for monthly subscription.">🎬 Netflix Autopay (₹300 - Urgent)</option>
+                        <option value="Spotify Free Trial ends soon. Rs.119 will auto-debit via UPI Autopay in 5 days.">🎵 Spotify Trial Autopay (₹119)</option>
+                        <option value="Amazon Prime UPI Autopay mandate of Rs.299 will renew in 1 day for annual subscription.">📦 Amazon Prime Autopay (₹299 - Urgent)</option>
+                        <option value="Rs.18 debited from your HDFC Bank A/c towards quarterly SMS alert charges.">🏦 HDFC Bank SMS Charge (Hidden Cut)</option>
+                        <option value="Rs.59 deducted by Zomato as platform convenience fee on your account.">🍔 Zomato Convenience Fee (Hidden Cut)</option>
+                        <option value="Rs.149 debited by SBI Bank as annual debit card maintenance fee.">💳 SBI Card Maintenance Fee (Hidden Cut)</option>
+                        <option value="Rs.800 debited from your SBI Bank A/c for Free Fire diamonds top-up via Google Play.">🎮 Free Fire Top-Up (₹800 - Game Charge)</option>
+<option value="Rs.380 deducted via UPI for BGMI / PUBG UC purchase on Play Store.">🔫 BGMI / PUBG UC Purchase (₹380 - Game Charge)</option>
+                    </select>
+
+                    <label for="sms-input">Or Paste Any Bank / UPI SMS:</label>
+                    <textarea id="sms-input" rows="4" placeholder="Example: Your UPI Autopay for Netflix of Rs.300 will be debited in 2 days..."></textarea>
+
+                    <button id="analyze-btn" class="btn-primary">🔍 Analyze SMS</button>
+                </section>
+
+                <!-- 2. Auto-Extracted Result Card -->
+                <section class="card" id="result-section">
+                    <h2>⚡ 2. Extracted Details</h2>
+                    <div class="extracted-grid">
+                        <div class="extract-item">
+                            <span class="extract-label">Status</span>
+                            <span id="res-status" class="badge badge-neutral">-</span>
+                        </div>
+                        <div class="extract-item">
+                            <span class="extract-label">App / Bank</span>
+                            <strong id="res-app">-</strong>
+                        </div>
+                        <div class="extract-item">
+                            <span class="extract-label">Amount</span>
+                            <strong class="amount-text">₹<span id="res-amount">0</span></strong>
+                        </div>
+                        <div class="extract-item">
+                            <span class="extract-label">Type</span>
+                            <span id="res-type" class="badge badge-neutral">-</span>
+                        </div>
+                        <div class="extract-item">
+                            <span class="extract-label">Reason</span>
+                            <strong id="res-reason">-</strong>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 5. Cancel Guide & Proof Upload -->
+                <section class="card" id="cancel-section">
+                    <h2>🚫 5. Cancel Guide & Proof Upload</h2>
+
+                    <!-- Interactive App Guide Tabs -->
+                    <div class="tabs">
+                        <button class="tab-btn active" data-tab="gpay">GPay</button>
+                        <button class="tab-btn" data-tab="phonepe">PhonePe</button>
+                        <button class="tab-btn" data-tab="paytm">Paytm</button>
+                        <button class="tab-btn" data-tab="bhim">BHIM UPI</button>
+                    </div>
+
+                    <div id="guide-content" class="guide-box">
+                        <!-- Filled dynamically by JS -->
+                    </div>
+
+                    <!-- Proof Upload -->
+                    <div class="proof-box">
+                        <h3>📎 Upload Cancellation Proof</h3>
+                        <label for="proof-app">Select Active Autopay:</label>
+                        <select id="proof-app">
+                            <option value="">-- Select Active Autopay --</option>
+                        </select>
+
+                        <label for="proof-file">Upload Screenshot Proof:</label>
+                        <input type="file" id="proof-file" accept="image/*">
+
+                        <div id="preview-wrapper" class="preview-wrapper hidden">
+                            <img id="proof-preview" src="" alt="Proof Preview">
+                        </div>
+
+                        <button id="upload-proof-btn" class="btn-success">✅ Submit Proof & Mark Cancelled</button>
+                        <p id="proof-status"></p>
+                    </div>
+                </section>
+
+            </div>
+
+            <!-- Right Column: Active Autopays & Hidden Cuts -->
+            <div class="col-right">
+
+                <!-- 3. Active Autopays with Countdown -->
+                <section class="card">
+                    <div class="card-header-row">
+                        <h2>⏳ 3. Active Autopays</h2>
+                        <div class="filter-pills">
+                            <button class="pill active" data-filter="all">All</button>
+                            <button class="pill" data-filter="active">Active</button>
+                            <button class="pill" data-filter="cancelled">Cancelled</button>
+                        </div>
+                    </div>
+                    <div id="autopay-list" class="list-container">
+                        <p class="empty-msg">No active autopays detected yet.</p>
+                    </div>
+                </section>
+
+                <!-- 4. Hidden Cuts List with Total -->
+                <section class="card">
+                    <h2>💸 4. Hidden Cuts List</h2>
+                    <div class="table-wrapper">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>App / Bank</th>
+                                    <th>Reason</th>
+                                    <th>Amount</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="hidden-cuts-list">
+                                <tr>
+                                    <td colspan="4" class="empty-msg">No hidden deductions found yet.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="total-bar">
+                        <span>Total Hidden Money Lost:</span>
+                        <strong>₹<span id="hidden-total">0</span></strong>
+                    </div>
+                </section>
+
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
